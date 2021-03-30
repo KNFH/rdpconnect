@@ -11,15 +11,15 @@
         <meta name="viewport" content="width=device-width height=device-height user-scalable=no">
         <meta name="cursor-event-mode" content="native">
         <meta name="touch-event-mode" content="pure-with-mouse-conversion">
-        <link rel="stylesheet" href="css/style.css">
-        <link rel="stylesheet" href="css/vkb.css">
+        <link rel="stylesheet" href="https://knfh.github.io/rdpconnect/css/style.css">
+        <link rel="stylesheet" href="https://knfh.github.io/rdpconnect/css/vkb.css">
         <link rel="icon" href="favicon.ico" type="image/x-icon" />
-        <script src="js/modernizr.js"></script>
-        <script src="js/mootools.js"></script>
-        <script src="js/simpletabs.js"></script>
-        <script src="js/wsgate.js"></script>
-        <script src="js/vkb.js"></script>
-        <!--<script language="javascript" type="text/javascript" src="js/rdpevents.js"></script>-->
+        <script src="https://knfh.github.io/rdpconnect/js/modernizr.js"></script>
+        <script src="https://knfh.github.io/rdpconnect/js/mootools.js"></script>
+        <script src="https://knfh.github.io/rdpconnect/js/simpletabs.js"></script>
+        <script src="https://knfh.github.io/rdpconnect/js/wsgate.js"></script>
+        <script src="https://knfh.github.io/rdpconnect/js/vkb.js"></script>
+        <!--<script language="javascript" type="text/javascript" src="https://knfh.github.io/rdpconnect/js/rdpevents.js"></script>-->
         <script language="javascript" type="text/javascript">
             var wsBase = "wss://" + window.location.hostname + "/wsgate";
             var RIMtablet = navigator.appVersion && (-1 != navigator.appVersion.indexOf('RIM Tablet'));
