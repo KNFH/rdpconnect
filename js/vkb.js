@@ -1,1634 +1,750 @@
+/*
+ * This code is based on:
+ * HTML Virtual Keyboard Interface Script - v1.49
+ *   Copyright (c) 2011 - GreyWyvern
+ *  - Licensed for free distribution under the BSDL
+ *          http://www.opensource.org/licenses/bsd-license.php
+ * Found at: http://www.greywyvern.com/code/javascript/keyboard
+ *
+ * Extensive modfications and mootoolization:
+ * Copyright (c) 2012 Fritz Elfert
+ */
+
 var wsgate = wsgate || {}
 
-wsgate.hasconsole = (typeof console !== 'undefined' && 'debug' in console && 'info' in console && 'warn' in console && 'error' in console);
-
-wsgate.o2s = function(obj, depth) {
-    depth = depth || [];
-    if (depth.contains(obj)) {
-        return '{SELF}';
-    }
-    switch (typeof(obj)) {
-        case 'undefined':
-            return 'undefined';
-        case 'string':
-            return '"' + obj.replace(/[\x00-\x1f\\"]/g, escape) + '"';
-        case 'array':
-            var string = [];
-            depth.push(obj);
-            for (var i = 0; i < obj.length; ++i) {
-                string.push(wsgate.o2s(obj[i], depth));
-            }
-            depth.pop();
-            return '[' + string + ']';
-        case 'object':
-        case 'hash':
-            var string = [];
-            depth.push(obj);
-            var isE = (obj instanceof UIEvent);
-            Object.each(obj, function(v, k) {
-                if (v instanceof HTMLElement) {
-                    string.push(k + '={HTMLElement}');
-                } else if (isE && (('layerX' == k) || ('layerY' == k) ('view' == k))) {
-                    string.push(k + '=!0');
-                } else {
-                    try {
-                        var vstr = wsgate.o2s(v, depth);
-                        if (vstr) {
-                            string.push(k + '=' + vstr);
-                        }
-                    } catch (error) {
-                        string.push(k + '=??E??');
-                    }
-                }
-            });
-            depth.pop();
-            return '{' + string + '}';
-        case 'number':
-        case 'boolean':
-            return '' + obj;
-        case 'null':
-            return 'null';
-    }
-    return null;
-};
-
-wsgate.Log = new Class({
-    initialize: function() {
-        this.ws = null;
+wsgate.vkbd = new Class({
+    Implements: [Options, Events],
+    options: {
+        target: null,
+        version: true,              // Show the version
+        deadcheck: true,            // Show dead keys checkbox
+        deadkeys: false,            // Turn dead keys on by default
+        numpadtoggle: true,         // Show numpad toggle
+        numpad: true,               // Show number pad by default
+        layouts: ['en_US','de_DE'], // Keyboard layouts to load
+        deflayout: 'de_DE',         // Default keyboard layout
+        size: 5,                    // Initial size
+        sizeswitch: true,           // Show size-adjust controls
+        hoverclick: 0,              // Click a key after n ms (0 = off)
+        clicksound: '/vkbclick.ogg'
     },
-    _p: function(pfx, a) {
-        var line = '';
-        var i;
-        for (i = 0; i < a.length; ++i) {
-            switch (typeof(a[i])) {
-                case 'string':
-                case 'number':
-                case 'boolean':
-                case 'null':
-                    line += a[i] + ' ';
-                    break;
-                default:
-                    line += wsgate.o2s(a[i]) + ' ';
-                    break;
-            }
-        }
-        if (0 < line.length) {
-            this.ws.send(pfx + line);
-        }
-    },
-    drop: function() {
-    },
-    debug: function() {
-},
-    info: function() {
-        if (this.ws) {
-            var a = Array.prototype.slice.call(arguments);
-            a.unshift('I:');
-            this._p.apply(this, a);
-        }
-        
-
-    },
-    warn: function() {
-        if (this.ws) {
-            var a = Array.prototype.slice.call(arguments);
-            a.unshift('W:');
-            this._p.apply(this, a);
-        }
-        
-
-    },
-    err: function() {
-        if (this.ws) {
-            var a = Array.prototype.slice.call(arguments);
-            a.unshift('E:');
-            this._p.apply(this, a);
-        }
-        
-
-    },
-    setWS: function(_ws) {
-        this.ws = _ws;
-    }
-});
-
-wsgate.WSrunner = new Class( {
-    Implements: Events,
-    initialize: function(url) {
-        this.url = url;
-    },
-    Run: function() {
-        try {
-            this.sock = new WebSocket(this.url);
-        } catch (err) { }
-        this.sock.binaryType = 'arraybuffer';
-        this.sock.onopen = this.onWSopen.bind(this);
-        this.sock.onclose = this.onWSclose.bind(this);
-        this.sock.onmessage = this.onWSmsg.bind(this);
-        this.sock.onerror = this.onWSerr.bind(this);
-    }
-});
-
-wsgate.RDP = new Class( {
-    Extends: wsgate.WSrunner,
-    initialize: function(url, canvas, cssCursor, useTouch, vkbd) {
-        this.log = new wsgate.Log();
-        this.canvas = canvas;
-        this.cctx = canvas.getContext('2d');
-        this.cctx.strokeStyle = 'rgba(255,255,255,0)';
-        this.cctx.FillStyle = 'rgba(255,255,255,0)';
-        this.bstore = new Element('canvas', {
-            'width':this.canvas.width,
-            'height':this.canvas.height,
-        });
-        this.bctx = this.bstore.getContext('2d');
-        this.aMF = 0;
-        this.Tcool = true;
-        this.pTe = null;
-        this.ccnt = 0;
-        this.clx = 0;
-        this.cly = 0;
-        this.clw = 0;
-        this.clh = 0;
-        this.mX = 0;
-        this.mY = 0;
-        this.chx = 10;
-        this.chy = 10;
-        this.modkeys = [144, ];
-        this.cursors = new Array();
-        this.sid = null;
-        this.open = false;
-        this.cssC = cssCursor;
-        this.uT = useTouch;
-        if (!cssCursor) {
-            this.cI = new Element('img', {
-                'src': '/c_default.png',
-                'styles': {
-                    'position': 'absolute',
-                'z-index': 998,
-                'left': this.mX - this.chx,
-                'top': this.mY - this.chy
-                }
-            }).inject(document.body);
-        }
-        if (vkbd) {
-            vkbd.addEvent('vkpress', this.onKv.bind(this));
-        }
-        //browser identiying variables
-        this.msie = window.navigator.userAgent.indexOf('MSIE ');
-        this.trident = window.navigator.userAgent.indexOf('Trident/');
-        this.parent(url);
-        //add the toggle function to the keyboard language button
-        $('keyboardlanguage').addEvent('click', this.ToggleLanguageButton.bind(this));
-    },
-    Disconnect: function() {
-        this._reset();
-    },
-    SendKey: function(comb) {
-        //code 0 : ctrl+alt+delete
-        //code 1 : alt+tab
-        //code 2 : alt+tab release
-
-        if (this.sock.readyState == this.sock.OPEN) {
-            this.log.debug('send  special combination', comb);
-            buf = new ArrayBuffer(12);
-            a = new Uint32Array(buf);
-            a[0] = 3; // WSOP_CS_SPECIALCOMB
-            a[1] = comb;
-            this.sock.send(buf);
+    initialize: function(options) {
+        this.setOptions(options);
+        this.VERSION = '1.49';
+        this.posX = 100;
+        this.posY = 100;
+        this.dragging = false;
+        this.VKI_shift = this.VKI_shiftlock = false;
+        this.VKI_altgr = this.VKI_altgrlock = false;
+        this.VKI_alt = this.VKI_altlock = false;
+        this.VKI_ctrl = this.VKI_ctrllock = false;
+        this.VKI_dead = false; // Flag: dead key active
+        this.VKI_kt = 'US International';
+        this.VKI_size = this.options.size;
+        this.VKI_keyCenter = 3;
+        /* ***** i18n text strings ************************************* */
+        this.VKI_i18n = {
+            '00': 'Display Number Pad',
+            '01': 'Display virtual keyboard interface',
+            '02': 'Select keyboard layout',
+            '03': 'Dead keys',
+            '04': 'On',
+            '05': 'Off',
+            '06': 'Close the keyboard',
+            '07': 'Clear',
+            '08': 'Clear this input',
+            '09': 'Version',
+            '10': 'Decrease keyboard size',
+            '11': 'Increase keyboard size'
         };
-    },
-    SendCredentials: function() {
-        var infoJSONstring = JSON.stringify(settingsGetJSON());
-        var len = infoJSONstring.length;
-        var buf = new ArrayBuffer((len + 1)*4); // 4 bytes for each char
-        var bufView = new Uint32Array(buf);
-        bufView[0] = 4; // WSOP_CS_CREDENTIAL_JSON
-        for(var i = 0; i<len; i++){
-            bufView[i+1] = infoJSONstring.charCodeAt(i);
-        }
-        this.sock.send(buf);
-    },
-    /**
-     * Multilanguage mode
-     */
-    useIME: false,
-    ToggleLanguageButton: function(){
-        if(this.useIME){
-            this.useIME = false;
-            $('keyboardlanguage').removeClass('extracommandshold');
-        }else{
-            this.useIME = true;
-            $('keyboardlanguage').addClass('extracommandshold');
-        }
-    },
-    /**
-     * Used when the special input method is on
-     */
-    IMEon: false,
-    /**
-     * The textarea element object
-     */
-    textAreaInput: null,
-    /**
-     * This function adds a textarea element on top of the canvas for the purpose of keyboard input
-     */
-    SetupCanvas: function(canvas){
-        if(this.textAreaInput)return;
 
-        var pos = canvas.getPosition();
-        var size= canvas.getSize();
-
-        this.textAreaInput = document.createElement('textarea');
-
-        this.textAreaInput.set('id', 'textareainput');
-
-        this.textAreaInput.setStyle('width', size.x);
-        this.textAreaInput.setStyle('height', size.y);
-        this.textAreaInput.setStyle('position', 'absolute');
-        this.textAreaInput.setStyle('opacity', 0);
-        this.textAreaInput.setStyle('resize', 'none');
-        this.textAreaInput.setStyle('cursor', 'default');
-        canvas.setStyle('cursor', 'none');
-
-        this.textAreaInput.setPosition(pos);
-
-        this.textAreaInput.addEvent('keydown', this.KeyDownEvent.bind(this));
-        this.textAreaInput.addEvent('keypress', this.KeyPressEvent.bind(this));
-        this.textAreaInput.addEvent('keyup', this.KeyUpEvent.bind(this));
-        this.textAreaInput.addEvent('copy', function(evt){
-            if (evt.preventDefault) evt.preventDefault();
-            if (evt.stopPropagation) evt.stopPropagation();
-        });
-
-        document.body.appendChild(this.textAreaInput);
-
-        //start the IME helper refresh
-        refreshIMEhelper();
-
-        //make sure the textarea is always on focus
-        this.textAreaInput.focus();
-        this.textAreaInput.addEvent('blur', function(){
-            setTimeout(function(){
-                if($('textareainput')){
-                    $('textareainput').focus();
-                }
-            },20);
-        });
-    },
-    /**
-     * Returns true when a non character is pressed
-     */
-    FunctionalKey: function(key){
-        return (key != 32 && ((key <= 46) || (91 <= key && key <= 145)));
-    },
-    /**
-     * Takes the contents of the textarea and sends them to the server
-     */
-    DumpTextArea: function(key){
-        if(key==13||key==0)
-        if(this.IMEon){
-            var textinput = this.textAreaInput.get("value");
-            if(textinput!=""){
-                if(textinput[0]=='\n'){
-                    textinput = textinput.substring(1);
-                }
-                this.SendUnicodeString(textinput);
-                this.textAreaInput.set("value","");
-            }
-            this.IMEon=false;
-        }
-    },    /**
-     * Position cursor image
-     */
-    cP: function() {
-        this.cI.setStyles({'left': this.mX - this.chx, 'top': this.mY - this.chy});
-    },
-    /**
-     * Check, if a given point is inside the clipping region.
-     */
-    _ckclp: function(x, y) {
-        if (this.clw || this.clh) {
-            return (
-                    (x >= this.clx) &&
-                    (x <= (this.clx + this.clw)) &&
-                    (y >= this.cly) &&
-                    (y <= (this.cly + this.clh))
-                   );
-        }
-        // No clipping region
-        return true;
-    },
-    /**
-     * Main message loop.
-     */
-    _pmsg: function(data) { // process a binary RDP message from our queue
-        var op, hdr, count, rects, bmdata, rgba, compressed, i, offs, x, y, sx, sy, w, h, dw, dh, bpp, color, len;
-        op = new Uint32Array(data, 0, 1);
-        switch (op[0]) {
-            case 0:
-                // BeginPaint
-                // this.log.debug('BeginPaint');
-                this._ctxS();
-                break;
-            case 1:
-                // EndPaint
-                // this.log.debug('EndPaint');
-                this._ctxR();
-                break;
-            case 2:
-                // Single bitmap
-                //
-                //  0 uint32 Destination X
-                //  1 uint32 Destination Y
-                //  2 uint32 Width
-                //  3 uint32 Height
-                //  4 uint32 Destination Width
-                //  5 uint32 Destination Height
-                //  6 uint32 Bits per Pixel
-                //  7 uint32 Flag: Compressed
-                //  8 uint32 DataSize
-                //
-                hdr = new Uint32Array(data, 4, 9);
-                bmdata = new Uint8Array(data, 40);
-                x = hdr[0];
-                y = hdr[1];
-                w = hdr[2];
-                h = hdr[3];
-                dw = hdr[4];
-                dh = hdr[5];
-                bpp = hdr[6];
-                compressed =  (hdr[7] != 0);
-                len = hdr[8];
-                if ((bpp == 16) || (bpp == 15)) {
-                    if (this._ckclp(x, y) && this._ckclp(x + dw, y + dh)) {
-                        // this.log.debug('BMi:',(compressed ? ' C ' : ' U '),' x=',x,'y=',y,' w=',w,' h=',h,' l=',len);
-                        var outB = this.cctx.createImageData(w, h);
-                        if (compressed) {
-                            wsgate.dRLE16_RGBA(bmdata, len, w, outB.data);
-                            wsgate.flipV(outB.data, w, h);
-                        } else {
-                            wsgate.dRGB162RGBA(bmdata, len, outB.data);
-                        }
-                        this.cctx.putImageData(outB, x, y, 0, 0, dw, dh);
-                    } else {
-                        // this.log.debug('BMc:',(compressed ? ' C ' : ' U '),' x=',x,'y=',y,' w=',w,' h=',h,' bpp=',bpp);
-                        // putImageData ignores the clipping region, so we must
-                        // clip ourselves: We first paint into a second canvas,
-                        // then use drawImage (which honors clipping).
-
-                        var outB = this.bctx.createImageData(w, h);
-                        if (compressed) {
-                            wsgate.dRLE16_RGBA(bmdata, len, w, outB.data);
-                            wsgate.flipV(outB.data, w, h);
-                        } else {
-                            wsgate.dRGB162RGBA(bmdata, len, outB.data);
-                        }
-                        this.bctx.putImageData(outB, 0, 0, 0, 0, dw, dh);
-                        this.cctx.drawImage(this.bstore, 0, 0, dw, dh, x, y, dw, dh);
+        // Load layouts
+        this.VKI_layout = {};
+        this.options.layouts.each(function(n) {
+            new Request.JSON({
+                'url': '/js/vkbl-' + n + '.json',
+                'method': 'get',
+                'async': false,
+                'onSuccess': function(obj) {
+                    this.VKI_layout[obj.displayname] = obj;
+                    if (n == this.options.deflayout) {
+                        this.VKI_kt = obj.displayname;
                     }
-                } else {
-                    this.log.warn('BPP <> 15/16 not yet implemented');
-                }
-                break;
-            case 3:
-                // Primary: OPAQUE_RECT_ORDER
-                // x, y , w, h, color
-                hdr = new Int32Array(data, 4, 4);
-                rgba = new Uint8Array(data, 20, 4);
-                // this.log.debug('Fill:',hdr[0], hdr[1], hdr[2], hdr[3], this._c2s(rgba));
-                this.cctx.fillStyle = this._c2s(rgba);
-                this.cctx.fillRect(hdr[0], hdr[1], hdr[2], hdr[3]);
-                break;
-            case 4:
-                // SetBounds
-                // left, top, right, bottom
-                hdr = new Int32Array(data, 4, 4);
-                this._cR(hdr[0], hdr[1], hdr[2] - hdr[0], hdr[3] - hdr[1], true);
-                break;
-            case 5:
-                // PatBlt
-                if (28 == data.byteLength) {
-                    // Solid brush style
-                    // x, y, width, height, fgcolor, rop3
-                    hdr = new Int32Array(data, 4, 4);
-                    x = hdr[0];
-                    y = hdr[1];
-                    w = hdr[2];
-                    h = hdr[3];
-                    rgba = new Uint8Array(data, 20, 4);
-                    this._ctxS();
-                    this._cR(x, y, w, h, false);
-                    if (this._sROP(new Uint32Array(data, 24, 1)[0])) {
-                        this.cctx.fillStyle = this._c2s(rgba);
-                        this.cctx.fillRect(x, y, w, h);
-                    }
-                    this._ctxR();
-                } else {
-                    this.log.warn('PatBlt: Patterned brush not yet implemented');
-                }
-                break;
-            case 6:
-                // Multi Opaque rect
-                // color, nrects
-                // rect1.x,rect1.y,rect1.w,rect1.h ... rectn.x,rectn.y,rectn.w,rectn.h
-                rgba = new Uint8Array(data, 4, 4);
-                count = new Uint32Array(data, 8, 1);
-                rects = new Uint32Array(data, 12, count[0] * 4);
-                // this.log.debug('MultiFill: ', count[0], " ", this._c2s(rgba));
-                this.cctx.fillStyle = this._c2s(rgba);
-                offs = 0;
-                // var c = this._c2s(rgba);
-                for (i = 0; i < count[0]; ++i) {
-                    this.cctx.fillRect(rects[offs], rects[offs+1], rects[offs+2], rects[offs+3]);
-                    // this._fR(rects[offs], rects[offs+1], rects[offs+2], rects[offs+3], c);
-                    offs += 4;
-                }
-                break;
-            case 7:
-                // ScrBlt
-                // rop3, x, y, w, h, sx, sy
-                hdr = new Int32Array(data, 8, 6);
-                x = hdr[0];
-                y = hdr[1];
-                w = hdr[2];
-                h = hdr[3];
-                sx = hdr[4];
-                sy = hdr[5];
-                if ((w > 0) && (h > 0)) {
-                    if (this._sROP(new Uint32Array(data, 4, 1)[0])) {
-                        if (this._ckclp(x, y) && this._ckclp(x + w, y + h)) {
-                            // No clipping necessary
-                            this.cctx.putImageData(this.cctx.getImageData(sx, sy, w, h), x, y);
-                        } else {
-                            // Clipping necessary
-                            this.bctx.putImageData(this.cctx.getImageData(sx, sy, w, h), 0, 0);
-                            this.cctx.drawImage(this.bstore, 0, 0, w, h, x, y, w, h);
-                        }
-                    }
-                } else {
-                    this.log.warn('ScrBlt: width and/or height is zero');
-                }
-                break;
-            case 8:
-                // PTR_NEW
-                // id, xhot, yhot
-                hdr = new Uint32Array(data, 4, 3);
-                if (this.cssC) {
-                    this.cursors[hdr[0]] = (this.msie > 0 || this.trident > 0) ? 'url(/cur/' + this.sid + '/' + hdr[0] + '), none' : //IE is not suporting given hot spots
-                                            'url(/cur/' + this.sid + '/' + hdr[0] + ') ' + hdr[1] + ' ' + hdr[2] + ',none'; 
-                } else {
-                    this.cursors[hdr[0]] = (this.msie > 0 || this.trident > 0) ? { u: '/cur/' + this.sid + '/' + hdr[0] } :
-                                            { u: '/cur/' + this.sid + '/' + hdr[0], x: hdr[1], y: hdr[2] };
-                }
-                break;
-            case 9:
-                // PTR_FREE
-                // id
-                this.cursors[new Uint32Array(data, 4, 1)[0]] = undefined;
-                break;
-            case 10:
-                // PTR_SET
-                // id
-                // this.log.debug('PS:', this.cursors[new Uint32Array(data, 4, 1)[0]]);
-                if (this.cssC) {
-                    if(this.textAreaInput)
-                        this.textAreaInput.setStyle('cursor', this.cursors[new Uint32Array(data, 4, 1)[0]]);
-                } else {
-                    var cobj = this.cursors[new Uint32Array(data, 4, 1)[0]];
-                    this.chx = cobj.x;
-                    this.chy = cobj.y;
-                    this.cI.src = cobj.u;
-                }
-                break;
-            case 11:
-                // PTR_SETNULL
-                if (this.cssC) {
-                    if(this.textAreaInput)
-                        this.textAreaInput.setStyle('cursor', 'none');
-                } else {
-                    this.cI.src = '/c_none.png';
-                }
-                break;
-            case 12:
-                // PTR_SETDEFAULT
-                if (this.cssC) {
-                    if(this.textAreaInput)
-                        this.textAreaInput.setStyle('cursor', 'default');
-                } else {
-                    this.chx = 10;
-                    this.chy = 10;
-                    this.cI.src = '/c_default.png';
-                }
-                break;
-            default:
-                this.log.warn('Unknown BINRESP: ', data.byteLength);
-        }
-    },
-    _cR: function(x, y, w, h, save) {
-        if (save) {
-            this.clx = x;
-            this.cly = y;
-            this.clw = w;
-            this.clh = h;
-        }
-        // Replace clipping region, NO intersection.
-        this.cctx.beginPath();
-        this.cctx.rect(0, 0, this.canvas.width, this.canvas.height);
-        this.cctx.clip();
-        if (x == y == 0) {
-            // All zero means: reset to full canvas size
-            if ((w == h == 0) || ((w == this.canvas.width) && (h == this.canvas.height))) {
-                return;
-            }
-        }
-        // New clipping region
-        this.cctx.beginPath();
-        this.cctx.rect(x, y, w, h);
-        this.cctx.clip();
-    },
-    _fR: function(x, y, w, h, color) {
-        return;
-        if ((w < 2) || (h < 2)) {
-            this.cctx.strokeStyle = color;
-            this.cctx.beginPath();
-            this.cctx.moveTo(x, y);
-            if (w > h) {
-                this.cctx.lineWidth = h;
-                this.cctx.lineTo(x + w, y);
-            } else {
-                this.cctx.lineWidth = w;
-                this.cctx.lineTo(x, y + h);
-            }
-            this.cctx.stroke();
-        } else {
-            this.cctx.fillStyle = color;
-            this.cctx.fillRect(x, y, w, h);
-        }
-    },
-    _sROP: function(rop) {
-        switch (rop) {
-            case 0x005A0049:
-                // GDI_PATINVERT: D = P ^ D
-                this.cctx.globalCompositeOperation = 'xor';
-                return true;
-                break;
-            case 0x00F00021:
-                // GDI_PATCOPY: D = P
-                this.cctx.globalCompositeOperation = 'copy';
-                return true;
-                break;
-            case 0x00CC0020:
-                // GDI_SRCCOPY: D = S
-                this.cctx.globalCompositeOperation = 'source-over';
-                return true;
-                break;
-            default:
-                this.log.warn('Unsupported raster op: ', rop.toString(16));
-                break;
-        }
-        return false;
+                }.bind(this)
+            }).addEvent('error', function(txt, err) {
+                console.debug('err:', err);
+                console.debug('txt:', txt);
+            }).send();
+        }, this);
         /*
-           case 0x00EE0086:
-        // GDI_SRCPAINT: D = S | D
-        break;
-        case 0x008800C6:
-        // GDI_SRCAND: D = S & D
-        break;
-        case 0x00660046:
-        // GDI_SRCINVERT: D = S ^ D
-        break;
-        case 0x00440328:
-        // GDI_SRCERASE: D = S & ~D
-        break;
-        case 0x00330008:
-        // GDI_NOTSRCCOPY: D = ~S
-        break;
-        case 0x001100A6:
-        // GDI_NOTSRCERASE: D = ~S & ~D
-        break;
-        case 0x00C000CA:
-        // GDI_MERGECOPY: D = S & P
-        break;
-        case 0x00BB0226:
-        // GDI_MERGEPAINT: D = ~S | D
-        break;
-        case 0x00FB0A09:
-        // GDI_PATPAINT: D = D | (P | ~S)
-        break;
-        case 0x00550009:
-        // GDI_DSTINVERT: D = ~D
-        break;
-        case 0x00000042:
-        // GDI_BLACKNESS: D = 0
-        break;
-        case 0x00FF0062:
-        // GDI_WHITENESS: D = 1
-        break;
-        case 0x00E20746:
-        // GDI_DSPDxax: D = (S & P) | (~S & D)
-        break;
-        case 0x00B8074A:
-        // GDI_PSDPxax: D = (S & D) | (~S & P)
-        break;
-        case 0x000C0324:
-        // GDI_SPna: D = S & ~P
-        break;
-        case 0x00220326:
-        // GDI_DSna D = D & ~S
-        break;
-        case 0x00220326:
-        // GDI_DSna: D = D & ~S
-        break;
-        case 0x00A000C9:
-        // GDI_DPa: D = D & P
-        break;
-        case 0x00A50065:
-        // GDI_PDxn: D = D ^ ~P
-        break;
+        if (this.options.clicksound) {
+            this.audio = new Audio(this.options.clicksound);
+        }
         */
-    },
-    /**
-     * Reset our state to disconnected
-     */
-    _reset: function() {
-        this.log.setWS(null);
-        this.fireEvent('disconnected');
-        if (this.sock.readyState == this.sock.OPEN) {
-            this.sock.close();
+        this.VKI_deadkey = {};
+        this.VKI_deadkey['"'] = this.VKI_deadkey['\u00a8'] = this.VKI_deadkey['\u309B'] = { // Umlaut / Diaeresis / Greek Dialytika / Hiragana/Katakana Voiced Sound Mark
+            'a': '\u00e4', 'e': '\u00eb', 'i': '\u00ef', 'o': '\u00f6', 'u': '\u00fc', 'y': '\u00ff', '\u03b9': '\u03ca', '\u03c5': '\u03cb',
+            '\u016B': '\u01D6', '\u00FA': '\u01D8', '\u01D4': '\u01DA', '\u00F9': '\u01DC', 'A': '\u00c4', 'E': '\u00cb', 'I': '\u00cf',
+            'O': '\u00d6', 'U': '\u00dc', 'Y': '\u0178', '\u0399': '\u03aa', '\u03a5': '\u03ab', '\u016A': '\u01D5', '\u00DA': '\u01D7',
+            '\u01D3': '\u01D9', '\u00D9': '\u01DB', '\u304b': '\u304c', '\u304d': '\u304e', '\u304f': '\u3050', '\u3051': '\u3052',
+            '\u3053': '\u3054', '\u305f': '\u3060', '\u3061': '\u3062', '\u3064': '\u3065', '\u3066': '\u3067', '\u3068': '\u3069',
+            '\u3055': '\u3056', '\u3057': '\u3058', '\u3059': '\u305a', '\u305b': '\u305c', '\u305d': '\u305e', '\u306f': '\u3070',
+            '\u3072': '\u3073', '\u3075': '\u3076', '\u3078': '\u3079', '\u307b': '\u307c', '\u30ab': '\u30ac', '\u30ad': '\u30ae',
+            '\u30af': '\u30b0', '\u30b1': '\u30b2', '\u30b3': '\u30b4', '\u30bf': '\u30c0', '\u30c1': '\u30c2', '\u30c4': '\u30c5',
+            '\u30c6': '\u30c7', '\u30c8': '\u30c9', '\u30b5': '\u30b6', '\u30b7': '\u30b8', '\u30b9': '\u30ba', '\u30bb': '\u30bc',
+            '\u30bd': '\u30be', '\u30cf': '\u30d0', '\u30d2': '\u30d3', '\u30d5': '\u30d6', '\u30d8': '\u30d9', '\u30db': '\u30dc'
+        };
+        this.VKI_deadkey['~'] = { // Tilde / Stroke
+            'a': '\u00e3', 'l': '\u0142', 'n': '\u00f1', 'o': '\u00f5',
+            'A': '\u00c3', 'L': '\u0141', 'N': '\u00d1', 'O': '\u00d5'
+        };
+        this.VKI_deadkey['^'] = { // Circumflex
+            'a': '\u00e2', 'e': '\u00ea', 'i': '\u00ee', 'o': '\u00f4', 'u': '\u00fb', 'w': '\u0175', 'y': '\u0177',
+            'A': '\u00c2', 'E': '\u00ca', 'I': '\u00ce', 'O': '\u00d4', 'U': '\u00db', 'W': '\u0174', 'Y': '\u0176'
+        };
+        this.VKI_deadkey['\u02c7'] = { // Baltic caron
+            'c': '\u010D', 'd': '\u010f', 'e': '\u011b', 's': '\u0161', 'l': '\u013e', 'n': '\u0148', 'r': '\u0159', 't': '\u0165',
+            'u': '\u01d4', 'z': '\u017E', '\u00fc': '\u01da', 'C': '\u010C', 'D': '\u010e', 'E': '\u011a', 'S': '\u0160',
+            'L': '\u013d', 'N': '\u0147', 'R': '\u0158', 'T': '\u0164', 'U': '\u01d3', 'Z': '\u017D', '\u00dc': '\u01d9'
+        };
+        this.VKI_deadkey['\u02d8'] = { // Romanian and Turkish breve
+            'a': '\u0103', 'g': '\u011f',
+            'A': '\u0102', 'G': '\u011e'
+        };
+        this.VKI_deadkey['-'] = this.VKI_deadkey['\u00af'] = { // Macron
+            'a': '\u0101', 'e': '\u0113', 'i': '\u012b', 'o': '\u014d', 'u': '\u016B', 'y': '\u0233', '\u00fc': '\u01d6',
+            'A': '\u0100', 'E': '\u0112', 'I': '\u012a', 'O': '\u014c', 'U': '\u016A', 'Y': '\u0232', '\u00dc': '\u01d5'
+        };
+        this.VKI_deadkey['`'] = { // Grave
+            'a': '\u00e0', 'e': '\u00e8', 'i': '\u00ec', 'o': '\u00f2', 'u': '\u00f9', '\u00fc': '\u01dc',
+            'A': '\u00c0', 'E': '\u00c8', 'I': '\u00cc', 'O': '\u00d2', 'U': '\u00d9', '\u00dc': '\u01db'
+        };
+        this.VKI_deadkey["'"] = this.VKI_deadkey['\u00b4'] = this.VKI_deadkey['\u0384'] = { // Acute / Greek Tonos
+            'a': '\u00e1', 'e': '\u00e9', 'i': '\u00ed', 'o': '\u00f3', 'u': '\u00fa', 'y': '\u00fd', '\u03b1': '\u03ac',
+            '\u03b5': '\u03ad', '\u03b7': '\u03ae', '\u03b9': '\u03af', '\u03bf': '\u03cc', '\u03c5': '\u03cd', '\u03c9': '\u03ce',
+            '\u00fc': '\u01d8', 'A': '\u00c1', 'E': '\u00c9', 'I': '\u00cd', 'O': '\u00d3', 'U': '\u00da', 'Y': '\u00dd',
+            '\u0391': '\u0386', '\u0395': '\u0388', '\u0397': '\u0389', '\u0399': '\u038a', '\u039f': '\u038c', '\u03a5': '\u038e',
+            '\u03a9': '\u038f', '\u00dc': '\u01d7'
+        };
+        this.VKI_deadkey['\u02dd'] = { // Hungarian Double Acute Accent
+            'o': '\u0151', 'u': '\u0171',
+            'O': '\u0150', 'U': '\u0170'
+        };
+        this.VKI_deadkey['\u0385'] = { // Greek Dialytika + Tonos
+            '\u03b9': '\u0390', '\u03c5': '\u03b0'
+        };
+        this.VKI_deadkey['\u00b0'] = this.VKI_deadkey['\u00ba'] = { // Ring
+            'a': '\u00e5', 'u': '\u016f',
+            'A': '\u00c5', 'U': '\u016e'
+        };
+        this.VKI_deadkey['\u02DB'] = { // Ogonek
+            'a': '\u0106', 'e': '\u0119', 'i': '\u012f', 'o': '\u01eb', 'u': '\u0173', 'y': '\u0177',
+            'A': '\u0105', 'E': '\u0118', 'I': '\u012e', 'O': '\u01ea', 'U': '\u0172', 'Y': '\u0176'
+        };
+        this.VKI_deadkey['\u02D9'] = { // Dot-above
+            'c': '\u010B', 'e': '\u0117', 'g': '\u0121', 'z': '\u017C',
+            'C': '\u010A', 'E': '\u0116', 'G': '\u0120', 'Z': '\u017B'
+        };
+        this.VKI_deadkey['\u00B8'] = this.VKI_deadkey['\u201a'] = { // Cedilla
+            'c': '\u00e7', 's': '\u015F',
+            'C': '\u00c7', 'S': '\u015E'
+        };
+        this.VKI_deadkey[','] = { // Comma
+            's': '\u0219', 't': '\u021B',
+            'S': '\u0218', 'T': '\u021A'
+        };
+        this.VKI_deadkey['\u3002'] = { // Hiragana/Katakana Point
+            '\u306f': '\u3071', '\u3072': '\u3074', '\u3075': '\u3077', '\u3078': '\u307a', '\u307b': '\u307d',
+            '\u30cf': '\u30d1', '\u30d2': '\u30d4', '\u30d5': '\u30d7', '\u30d8': '\u30da', '\u30db': '\u30dd'
+        };
+        this.VKI_symbol = {
+            '\u00a0': 'NB\nSP', '\u200b': 'ZW\nSP', '\u200c': 'ZW\nNJ', '\u200d': 'ZW\nJ'
+        };
+        this.VKI_numpad = [
+            [['$'], ['\u00a3'], ['\u20ac'], ['\u00a5']],
+            [['7'], ['8'], ['9'], ['/']],
+            [['4'], ['5'], ['6'], ['*']],
+            [['1'], ['2'], ['3'], ['-']],
+            [['0'], ['.'], ['='], ['+']]
+                ];
+        this.cblock = [
+            [['Prt', 0x2c],['Slk', 0],['\u231b', 0x13]],
+            [['Ins', 0x2d],['\u21f1', 0x24],['\u21d1', 0x21]],
+            [['Del', 0x2e],['\u21f2', 0x23],['\u21d3', 0x23]],
+            [[''],['\u2191', 0x26],['']],
+            [['\u2190', 0x25],['\u2193', 0x28],['\u2192', 0x27]],
+            ];
+        this.fnblock = [
+            ['Esc', 0x1b], ['F1', 0x70], ['F2', 0x71], ['F3', 0x72], ['F4', 0x73], ['F5', 0x74],
+            ['F6', 0x75], ['F7', 0x76], ['F8', 0x77], ['F9', 0x78], ['F10', 0x79], ['F11', 0x7a],
+            ['F12', 0x7b]
+            ];
+        if (!this.VKI_layout[this.VKI_kt]) {
+            throw 'No layout named "' + this.VKI_kt + '"';
         }
-        this.clx = 0;
-        this.cly = 0;
-        this.clw = 0;
-        this.clh = 0;
-        this.canvas.removeEvents();
-        document.removeEvents();
-        try{
-            this.textAreaInput.remove();
+        this.VKI_keyboard = new Element('table', {
+            'id': 'keyboardInputMaster',
+            'dir': 'ltr',
+            'cellspacing': 0,
+            'class': 'hidden',
+            'styles': {
+                'position': 'absolute',
+                'left': this.posX,
+                'top': this.posY,
+                'z-index': 999
+            },
+            'events': {
+                'click': function(e) { e.stopPropagation(); },
+                'selectstart': function(e) { e.stopPropagation(); }
+            }
+        }).inject(document.body);
+        this.VKI_langCode = {};
+        var thead = new Element('thead', {
+            'events': {
+                'mousedown': this.dragStart.bind(this),
+            }
+        }).inject(this.VKI_keyboard);
+        var tr = new Element('tr').inject(thead);
+        var th = new Element('th', {'colspan':3}).inject(tr);
+
+        var nlayouts = 0;
+        Object.each(this.VKI_layout, function(item) { if ('object' == typeof(item)) { nlayouts++; } });
+        // Build layout selector if more than one layouts
+        if (nlayouts > 1) {
+            this.kbSelect = new Element('div', {
+                'html': this.VKI_kt,
+                'title': this.VKI_i18n['02']
+            }).addEvent('click', function(e) {
+                var ol = e.target.getElement('ol');
+                if (!ol.style.display) {
+                    ol.setStyle('display','block');
+                    var scr = 0;
+                    ol.getElements('li').each(function(li) {
+                        if (this.VKI_kt == li.firstChild.nodeValue) {
+                            li.addClass('selected');
+                            scr = li.offsetTop - li.offsetHeight * 2;
+                        } else {
+                            li.removeClass('selected');
+                        }
+                    });
+                    setTimeout(function() { ol.scrollTop = scr; }, 0);
+                } else {
+                    ol.setStyle('display','');
+                }
+            }.bind(this)).appendText(' \u25be').inject(th);
+            var ol = new Element('ol').inject(this.kbSelect);
+            for (ktype in this.VKI_layout) {
+                if (typeof this.VKI_layout[ktype] == 'object') {
+                    if (!this.VKI_layout[ktype].lang) { 
+                        this.VKI_layout[ktype].lang = [];
+                    }
+                    for (var x = 0; x < this.VKI_layout[ktype].lang.length; x++) {
+                        this.VKI_langCode[this.VKI_layout[ktype].lang[x].toLowerCase().replace(/-/g, '_')] = ktype;
+                    }
+                    var li = new Element('li', {
+                        'title': this.VKI_layout[ktype].name,
+                        'html': ktype
+                    }).inject(ol).addEvent('click', function(e) {
+                        e.stopPropagation();
+                        var el = e.target;
+                        el.parentNode.setStyle('display','');
+                        this.VKI_kt = this.kbSelect.firstChild.nodeValue = el.get('text');
+                        this.VKI_buildKeys();
+                    }.bind(this));
+                }
+            }
         }
-        catch(err){
+        // Sort the layout selector alphabetically
+        this.VKI_langCode.index = [];
+        for (prop in this.VKI_langCode) {
+            if (prop != 'index' && typeof this.VKI_langCode[prop] == 'string') {
+                this.VKI_langCode.index.push(prop);
+            }
         }
-        this.textAreaInput = null;
-        while (this.ccnt > 0) {
-            this.cctx.restore();
-            this.ccnt -= 1;
+        this.VKI_langCode.index.sort();
+        this.VKI_langCode.index.reverse();
+
+        // Build Number-pad toggle-button
+        if (this.options.numpadtoggle) {
+            new Element('span', {
+                'html': '#',
+                'title': this.VKI_i18n['00']
+            }).addEvent('click', function() {
+                this.kbNumpad.toggleClass('hidden');
+            }.bind(this)).inject(th);
         }
-        this.cctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
-        document.title = document.title.replace(/:.*/, ': offline');
-        if (this.cssC) {
-            this.canvas.setStyle('cursor','default');
+
+        // Build SizeUp and SizeDown buttons
+        if (this.options.sizeswitch) {
+            new Element('small', {
+                'html': '\u21d3',
+                'title': this.VKI_i18n['10']
+            }).addEvent('click', function() {
+                this.VKI_size--;
+                this.VKI_kbsize();
+            }.bind(this)).inject(th);
+            new Element('big', {
+                'html': '\u21d1',
+                'title': this.VKI_i18n['11']
+            }).addEvent('click', function() {
+                this.VKI_size++;
+                this.VKI_kbsize();
+            }.bind(this)).inject(th);
+        }
+
+        // Build Clear button
+        if (this.options.target) {
+            new Element('span', {
+                'html': this.VKI_i18n['07'],
+                'title': this.VKI_i18n['08']
+            }).addEvent('click', function() {
+                this.options.target.value = '';
+                this.options.target.focus();
+            }.bind(this)).inject(th);
+        }
+
+        // Build Close box
+        var closeBox = new Element('strong', {
+            'html': 'X',
+            'title': this.VKI_i18n['06']
+        }).addEvent('click', function() {
+            this.hide();
+        }.bind(this)).inject(th);
+
+        var tbody = new Element('tbody').inject(this.VKI_keyboard);
+        var tr = new Element('tr').inject(tbody);
+        var td = new Element('td').inject(tr);
+        var div = new Element('div').inject(td);
+
+        // Build deadKey checkbox
+        if (this.options.deadcheck) {
+            var label = new Element('label').inject(div);
+            this.deadCheckbox = new Element('input', {
+                'type': 'checkbox',
+                'title': this.VKI_i18n['03'] + ': ' + (this.options.deadkeys ? this.VKI_i18n['04'] : this.VKI_i18n['05']),
+                'defaultchecked': this.options.deadkeys,
+                'checked': this.options.deadkeys
+            }).addEvent('click', function(e) {
+                el = e.target;
+                el.set('title', this.VKI_i18n['03'] + ': ' + ((el.checked) ? this.VKI_i18n['04'] : this.VKI_i18n['05']));
+                this.modify('');
+            }.bind(this)).inject(label);
         } else {
-            this.cI.src = '/c_default.png';
+            this.deadCheckbox = new Element('input', {
+                'type': 'checkbox',
+                'defaultchecked': this.options.deadkeys,
+                'checked': this.options.deadkeys
+            });
         }
-        if (!this.cssC) {
-            this.cI.removeEvents();
-            this.cI.destroy();
+
+        // Build Version display
+        if (this.options.version) {
+            new Element('var', {
+                'html': 'v' + this.VERSION,
+                'title': this.VKI_i18n['09'] + ' ' + this.VERSION
+            }).inject(div);
+        }
+
+        // Build cursor block
+        this.kbCursor = new Element('td', {
+            'id': 'keyboardInputCursor'
+        }).inject(tr);
+        var ctable = new Element('table', {
+            'cellspacing': '0'
+        }).inject(this.kbCursor);
+        var ctbody = new Element('tbody').inject(ctable);
+        this.cblock.each(function(row) {
+            ctr = new Element('tr').inject(ctbody);
+            row.each(function(col) {
+                this.VKI_stdEvents(new Element('td', {
+                    'html': col[0],
+                    'class': (col[0].length ? '' : 'none'),
+                    'char': col[1],
+                    'events': {
+                        'click': (col[1] ? this.kclick2.bind(this) : this.dummy)
+                    }
+                }).inject(ctr));
+            }.bind(this));
+        }.bind(this));
+
+        // Build NumPad
+        this.kbNumpad = new Element('td', {
+            'id': 'keyboardInputNumpad',
+            'class': (this.options.numpad ? '' : 'hidden')
+        }).inject(tr);
+        var ntable = new Element('table', {
+            'cellspacing': '0'
+        }).inject(this.kbNumpad);
+        var ntbody = new Element('tbody').inject(ntable);
+        for (var x = 0; x < this.VKI_numpad.length; x++) {
+            var ntr = new Element('tr').inject(ntbody);
+            for (var y = 0; y < this.VKI_numpad[x].length; y++) {
+                this.VKI_stdEvents(new Element('td', {
+                    'html': this.VKI_numpad[x][y],
+                    'events': {
+                        'click': this.kclick.bind(this)
+                    }
+                }).inject(ntr));
+            }
+        }
+
+        // Build normal keys
+        this.VKI_buildKeys();
+        this.VKI_keyboard.unselectable = 'on';
+        this.VKI_kbsize();
+    },
+    dummy: function() {
+    },
+    VKI_stdEvents: function(elem) {
+        if ('td' == elem.get('tag')) {
+            // elem.addEvent('dblclick', function(e) { e.PreventDefault(); });
+            if (this.options.hoverclick) {
+                elem.clid = 0;
+                elem.addEvents({
+                    'mouseover': function(e) {
+                        var el = e.target;
+                        clearTimeout(el.clid);
+                        el.clid = function() {
+                            this.fireEvent('click', this, 0);
+                        }.delay(this.options.hoverclick);
+                    }.bind(this),
+                    'mouseout': function() { clearTimeout(this.clid); }.bind(elem),
+                    'mousedown': function() { clearTimeout(this.clid); }.bind(elem),
+                    'mouseup': function() { clearTimeout(this.clid); }.bind(elem)
+                });
+            }
         }
     },
-    fT: function() {
-        delete this.fTid;
-        if (this.pT) {
-            this.fireEvent('touch' + this.pT);
-            this.pT = 0;
-            return;
+    VKI_kbsize: function(e) {
+        this.VKI_size = Math.min(5, Math.max(1, this.VKI_size));
+        for (var i = 0; i < 6; i++) {
+            this.VKI_keyboard.removeClass('keyboardInputSize' + i);
         }
-        if (this.pTe) {
-            this.onMd(this.pTe);
-            this.pTe = null;
+        if (this.VKI_size != 2) {
+            this.VKI_keyboard.addClass('keyboardInputSize' + this.VKI_size);
         }
     },
-    cT: function() {
-        this.log.debug('cT');
-        this.Tcool = true;
+    kdown: function(evt) {
     },
-    /**
-     * Event handler for touch start
-     */
-    onTs: function(evt) {
-        var tn = evt.targetTouches.length;
-        this.log.debug('Ts:', tn);
-        switch (tn) {
-            default:
-                break;
-            case 1:
-                this.pTe = evt;
-                evt.preventDefault();
-                if ('number' == typeof(this.fTid)) {
-                    clearTimeout(this.fTid);
-                }
-                this.fTid = this.fT.delay(50, this);
-                break;
-            case 2:
-                this.pT = 2;
-                this.Tcool = false;
-                evt.preventDefault();
-                if ('number' == typeof(this.fTid)) {
-                    clearTimeout(this.fTid);
-                }
-                this.cT.delay(500, this)
-                this.fTid = this.fT.delay(50, this);
-                break;
-            case 3:
-                this.pT = 3;
-                this.Tcool = false;
-                evt.preventDefault();
-                if ('number' == typeof(this.fTid)) {
-                    clearTimeout(this.fTid);
-                }
-                this.cT.delay(500, this)
-                this.fTid = this.fT.delay(50, this);
-                break;
-            case 4:
-                this.pT = 4;
-                this.Tcool = false;
-                evt.preventDefault();
-                if ('number' == typeof(this.fTid)) {
-                    clearTimeout(this.fTid);
-                }
-                this.cT.delay(500, this)
-                this.fTid = this.fT.delay(50, this);
-                break;
-        }
-        return true;
+    kup: function(evt) {
     },
-    /**
-     * Event handler for touch start
-     */
-    onTe: function(evt) {
-        if ((0 == evt.targetTouches.length) && this.Tcool) {
-            evt.preventDefault();
-            this.onMu(evt, evt.changedTouches[0].pageX, evt.changedTouches[0].pageY);
-        }
-    },
-    /**
-     * Event handler for touch move
-     */
-    onTm: function(evt) {
-        // this.log.debug('Tm:', evt);
-        if (1 == evt.targetTouches.length) {
-            this.onMm(evt);
-        }
-    },
-    /**
-     * Event handler for mouse move events
-     */
-    onMm: function(evt) {
-        var buf, a, x, y;
-        evt.preventDefault();
-        x = (this.msie > 0 || this.trident > 0) ? evt.event.layerX - evt.event.currentTarget.offsetLeft : evt.event.layerX;
-        y = (this.msie > 0 || this.trident > 0) ? evt.event.layerY - evt.event.currentTarget.offsetTop : evt.event.layerY;
-        if (!this.cssC) {
-            this.mX = x;
-            this.mY = y;
-            this.cP();
-        }
-        // this.log.debug('mM x: ', x, ' y: ', y);
-        if (this.sock.readyState == this.sock.OPEN) {
-            buf = new ArrayBuffer(16);
-            a = new Uint32Array(buf);
-            a[0] = 0; // WSOP_CS_MOUSE
-            a[1] = 0x0800; // PTR_FLAGS_MOVE
-            a[2] = x;
-            a[3] = y;
-            this.sock.send(buf);
-        }
-    },
-    /**
-     * Event handler for mouse down events
-     */
-    onMd: function(evt) {
-        var buf, a, x, y, which;
-        if (this.Tcool) {
-            if(evt.preventDefault) evt.preventDefault();
-            if(evt.stopPropagation) evt.stopPropagation();
-            if (evt.rightClick && evt.control && evt.alt) {
-                this.fireEvent('touch3');
+    kclick: function(evt) {
+        var done = false, character = '\xa0', el = evt.target;
+        if (el.firstChild.nodeName.toLowerCase() != 'small') {
+            if ((character = el.firstChild.nodeValue) == '\xa0') {
                 return;
             }
-            x = (this.msie > 0 || this.trident > 0) ? evt.event.layerX - evt.event.currentTarget.offsetLeft : evt.event.layerX;
-            y = (this.msie > 0 || this.trident > 0) ? evt.event.layerY - evt.event.currentTarget.offsetTop : evt.event.layerY;
-            which = this._mB(evt);
-            this.log.debug('mD b: ', which, ' x: ', x, ' y: ', y);
-            if (this.sock.readyState == this.sock.OPEN) {
-                buf = new ArrayBuffer(16);
-                a = new Uint32Array(buf);
-                a[0] = 0; // WSOP_CS_MOUSE
-                a[1] = 0x8000 | which;
-                a[2] = x;
-                a[3] = y;
-                this.sock.send(buf);
-                this.mouseDownStatus[which] = true;
-            }
-        }
-    },
-    /**
-     * Event handler for mouse up events
-     */
-    onMu: function(evt, x, y) {
-        var buf, a, x, y, which;
-        if (this.Tcool) {
-            evt.preventDefault();
-            x = (this.msie > 0 || this.trident > 0) ? evt.event.layerX - evt.event.currentTarget.offsetLeft : evt.event.layerX;
-            y = (this.msie > 0 || this.trident > 0) ? evt.event.layerY - evt.event.currentTarget.offsetTop : evt.event.layerY;
-            which = this._mB(evt);
-            this.log.debug('mU b: ', which, ' x: ', x, ' y: ', y);
-            if (this.aMF) {
-                this.fireEvent('mouserelease');
-            }
-            if (this.sock.readyState == this.sock.OPEN) {
-                buf = new ArrayBuffer(16);
-                a = new Uint32Array(buf);
-                a[0] = 0; // WSOP_CS_MOUSE
-                a[1] = which;
-                a[2] = x;
-                a[3] = y;
-                this.sock.send(buf);
-                this.mouseDownStatus[which] = false;
-            }
-        }
-    },
-    /**
-     * Event handler for mouse wheel events
-     */
-    onMw: function(evt) {
-        var buf, a, x, y;
-        evt.preventDefault();
-        x = (this.msie > 0 || this.trident > 0) ? evt.event.layerX - evt.event.currentTarget.offsetLeft : evt.event.layerX;
-        y = (this.msie > 0 || this.trident > 0) ? evt.event.layerY - evt.event.currentTarget.offsetTop : evt.event.layerY;
-        // this.log.debug('mW d: ', evt.wheel, ' x: ', x, ' y: ', y);
-        if (this.sock.readyState == this.sock.OPEN) {
-            buf = new ArrayBuffer(16);
-            a = new Uint32Array(buf);
-            a[0] = 0; // WSOP_CS_MOUSE
-            a[1] = 0x200 | ((evt.wheel > 0) ? 0x087 : 0x188);
-            a[2] = 0;
-            a[3] = 0;
-            this.sock.send(buf);
-        }
-    },
-    /**
-     * Field used to keep the states of the sent mouse events
-     */
-    mouseDownStatus: {},
-    /**
-     * Event handler for mouse leaving the canvas area
-     * used to send mouse release for any unsent mouse releases
-     */
-    onMouseLeave: function(evt){
-       for(var button in this.mouseDownStatus){
-           if(this.mouseDownStatus[button]){
-               var x = (this.msie > 0 || this.trident > 0) ? evt.event.layerX - evt.event.currentTarget.offsetLeft : evt.event.layerX;
-               var y = (this.msie > 0 || this.trident > 0) ? evt.event.layerY - evt.event.currentTarget.offsetTop : evt.event.layerY;
-               var maxX = $('textareainput').getStyle('width').toInt();
-               var maxY = $('textareainput').getStyle('height').toInt();
-               if (x < 0) x = 0;
-               if (y < 0) y = 0;
-               if (x > maxX) x = maxX;
-               if (y > maxY) y = maxY;
-               var which = button;
-               if (this.sock.readyState == this.sock.OPEN) {
-                   buf = new ArrayBuffer(16);
-                   a = new Uint32Array(buf);
-                   a[0] = 0; // WSOP_CS_MOUSE
-                   a[1] = which;
-                   a[2] = x;
-                   a[3] = y;
-                   this.sock.send(buf);
-                   this.mouseDownStatus[which] = false;
-               }
-           }
-       }
-    },
-    /**
-     * Event handler for sending array of keys to be pressed
-     */
-    sendKeys: function(codes) {
-        var myStringArray = ["Hello","World"];
-        for (var i = 0; i < codes.length; i++) {
-            alert(codes[i]);
-            if(this.sock.readyState == this.sock.OPEN) {
-                buf = new ArrayBuffer(12);
-
-            }
-        }
-    },
-    /**
-     * Sends a unicode char or string
-     */
-    SendUnicodeString: function(str){
-        var len = str.length;
-        buf = new ArrayBuffer(4 * len + 4);
-        a = new Uint32Array(buf);
-        a[0] = 5; // WSOP_CS_UNICODE
-        for(var i = 0; i<len; i++){
-            a[i+1] = str.charCodeAt(i); 
-        }
-        this.sock.send(buf);
-    },
-    /**
-     * Sends a scancode key event
-     * down = 1
-     * up = 0
-     */
-    SendKeyUpDown: function(key, upDown){
-        if (this.sock.readyState == this.sock.OPEN) {
-            buf = new ArrayBuffer(12);
-            a = new Uint32Array(buf);
-            a[0] = 1; // WSOP_CS_KUPDOWN
-            a[1] = upDown;
-            a[2] = key;
-            this.sock.send(buf);
-        }
-    },
-    KeyDownEvent: function(evt){
-        if(!this.useIME){
-            this.SendKeyUpDown(evt.code, 1);
-        }else{
-            if(evt.code==229||evt.code==0)this.IMEon=true;
-            //send key presses only when IME is off
-            if(!this.IMEon){
-                if(this.FunctionalKey(evt.code)){
-                    if(evt.preventDefault) evt.preventDefault();
-                    if(evt.stopPropagation) evt.stopPropagation();
-                    this.SendKeyUpDown(evt.code, 1);
-                }
-            }
-        }
-    },
-    KeyUpEvent: function(evt){
-        if(!this.useIME){
-            this.SendKeyUpDown(evt.code, 0);
-            this.textAreaInput.set("value","");
-        }else{
-            if(!this.IMEon)
-            if(this.FunctionalKey(evt.code)){
-                if(evt.preventDefault) evt.preventDefault();
-                if(evt.stopPropagation) evt.stopPropagation();
-                this.SendKeyUpDown(evt.code, 0);
-            }
-            this.DumpTextArea(evt.code);
-        }
-    },
-    /**
-     * Sends unicode to the server
-     */
-    KeyPressEvent: function(evt){
-        if(this.useIME)
-        if(!this.IMEon){
-            this.SendUnicodeString(String.fromCharCode(evt.code));
-            $('textareainput').set("value","");
-            if(evt.preventDefault) evt.preventDefault();
-            if(evt.stopPropagation) evt.stopPropagation();
-        }
-        this.DumpTextArea(evt.code);
-    },
-    /**
-     * Event handler for key down events
-     */
-    onKd: function(evt) {
-        var a, buf;
-        this.log.debug('kD code: ', evt.code, ' ', evt);
-        evt.preventDefault();
-        // this.log.debug('kD code: ', evt.code, ' ', evt);
-        if (this.sock.readyState == this.sock.OPEN) {
-            buf = new ArrayBuffer(12);
-            a = new Uint32Array(buf);
-            a[0] = 1; // WSOP_CS_KUPDOWN
-            a[1] = 1; // down
-            a[2] = evt.code;
-            this.sock.send(buf);
-        }
-    },
-    /**
-     * Event handler for key up events
-     */
-    onKu: function(evt) {
-        var a, buf;
-        evt.preventDefault();
-        this.log.debug('ku code: ', evt.code, ' ', evt);
-        if (this.sock.readyState == this.sock.OPEN) {
-            buf = new ArrayBuffer(12);
-            a = new Uint32Array(buf);
-            a[0] = 1; // WSOP_CS_KUPDOWN
-            a[1] = 0; // up
-            a[2] = evt.code;
-            this.sock.send(buf);
-        }
-    },
-    /**
-     * Event handler for virtual keyboard
-     */
-    onKv: function(evt) {
-        var a, buf;
-        if (this.sock.readyState == this.sock.OPEN) {
-            // this.log.debug('kP code: ', evt.code);
-            buf = new ArrayBuffer(12);
-            a = new Uint32Array(buf);
-            if (evt.special) {
-                a[0] = 1; // WSOP_CS_KUPDOWN
-                a[1] = 1; // down
-                a[2] = evt.code;
-                this.sock.send(buf);
-                a[0] = 1; // WSOP_CS_KUPDOWN
-                a[1] = 0; // up
-                a[2] = evt.code;
-            } else {
-                a[0] = 2; // WSOP_CS_KPRESS
-                a[1] = (evt.shift ? 1 : 0)|(evt.control ? 2 : 0)|(evt.alt ? 4 : 0)|(evt.meta ? 8 : 0);
-                a[2] = evt.code;
-            }
-            this.sock.send(buf);
-        }
-    },
-    /**
-     * Event handler for key pressed events
-     Obsv: not used anymore. Will be removed after checking it's dependants. 
-     */
-    onKp: function(evt) {
-	    return;
-    },
-    /**
-     * Event handler for WebSocket RX events
-     */
-    onWSmsg: function(evt) {
-        //hide the loading image when the actual streaming starts
-        if ($('dvLoading').getStyle("visibility") !== "hidden") {
-            $('dvLoading').setStyles({ 'visibility': 'hidden' });
-        }
-        switch (typeof(evt.data)) {
-            // We use text messages for alerts and debugging ...
-            case 'string':
-                // this.log.debug(evt.data);
-                switch (evt.data.substr(0,2)) {
-                    case "T:":
-                            this._reset();
-                            break;
-                    case "E:":
-                            var msg = evt.data.substring(2);
-                            if(msg.substring(0, 2)=='E:'){
-                                embedded = true;
-                                msg = msg.substring(2);
-                            }
-                            this.log.err(msg);
-                            this.fireEvent('alert', msg);
-                            this._reset();
-                            break;
-                    case 'I:':
-                            this.log.info(evt.data.substring(2));
-                            break;
-                    case 'W:':
-                            this.log.warn(evt.data.substring(2));
-                            break;
-                    case 'D:':
-                            this.log.debug(evt.data.substring(2));
-                            break;
-                    case 'S:':
-                            this.sid = evt.data.substring(2);
-                            break;
-                    case 'R:':
-                            //resolution changed
-                            resolution=evt.data.substr(2).split('x');
-                            $('screen').width=resolution[0];
-                            $('screen').height=resolution[1];
-                            this.bstore.width=resolution[0];
-                            this.bstore.height=resolution[1];
-                            $('textareainput').setStyle('width', resolution[0]+'px');
-                            $('textareainput').setStyle('height', resolution[1]+'px');
-                            break;
-                    case 'C:':
-                            var msg = evt.data.substr(2);
-                            if(msg.substr(0, 2) == 'E:'){
-                                msg = msg.substr(2);
-                                embedded = true;
-                            }
-                            if(msg == "RDP session connection started."){
-                                //the connection worked so we can set the cookies
-                                settingsSet();
-                            }
-                            break;
-                }
-                break;
-                // ... and binary messages for the actual RDP stuff.
-            case 'object':
-                this._pmsg(evt.data);
-                break;
-        }
-
-    },
-    /**
-     * Event handler for WebSocket connect events
-     */
-    onWSopen: function(evt) {
-        this.open = true;
-        this.log.setWS(this.sock);
-        //add the textarea on top of the canvas
-        this.SetupCanvas($('screen'));
-        // Add listeners for the various input events
-        this.textAreaInput.addEvent('mousemove', this.onMm.bind(this));
-        this.textAreaInput.addEvent('mousedown', this.onMd.bind(this));
-        this.textAreaInput.addEvent('mouseup', this.onMu.bind(this));
-        this.textAreaInput.addEvent('mousewheel', this.onMw.bind(this));
-        this.textAreaInput.addEvent('mouseleave', this.onMouseLeave.bind(this));
-        // Disable the browser's context menu
-        this.textAreaInput.addEvent('contextmenu', function(e) {e.stop();});
-        // For touch devices
-        if (this.uT) {
-            this.textAreaInput.addEvent('touchstart', this.onTs.bind(this));
-            this.textAreaInput.addEvent('touchend', this.onTe.bind(this));
-            this.textAreaInput.addEvent('touchmove', this.onTm.bind(this));
-        }
-        if (!this.cssC) {
-            // Same events on pointer image
-            this.cI.addEvent('mousemove', this.onMm.bind(this));
-            this.cI.addEvent('mousedown', this.onMd.bind(this));
-            this.cI.addEvent('mouseup', this.onMu.bind(this));
-            this.cI.addEvent('mousewheel', this.onMw.bind(this));
-            this.cI.addEvent('contextmenu', function(e) {e.stop();});
-            if (this.uT) {
-                this.cI.addEvent('touchstart', this.onTs.bind(this));
-                this.cI.addEvent('touchend', this.onTe.bind(this));
-                this.cI.addEvent('touchmove', this.onTm.bind(this));
-            }
-        }
-        this.fireEvent('connected');
-        this.SendCredentials();
-    },
-    /**
-     * Event handler for WebSocket disconnect events
-     */
-    onWSclose: function(evt) {
-        /*if (Browser.name == 'chrome') {
-            // Current chrome is buggy in that it does not
-            // fire WebSockets error events, so we use the
-            // wasClean flag in the close event.
-            if ((!evt.wasClean) && (!this.open)) {
-                this.fireEvent('alert', 'Could not connect to WebSockets gateway');
-            }
-        }*/
-        //this.open = false;
-        this._reset();
-    },
-    /**
-     * Event handler for WebSocket error events
-     */
-    onWSerr: function (evt) {
-        this.open = false;
-        switch (this.sock.readyState) {
-            case this.sock.CONNECTING:
-                this.fireEvent('alert', 'Could not connect to WebSockets gateway');
-                break;
-        }
-        this._reset();
-    },
-    /**
-     * Convert a color value contained in an uint8 array into an rgba expression
-     * that can be used to parameterize the canvas.
-     */
-    _c2s: function(c) {
-        return 'rgba' + '(' + c[0] + ',' + c[1] + ',' + c[2] + ',' + ((0.0 + c[3]) / 255) + ')';
-    },
-    /**
-     * Save the canvas state and remember this in our object.
-     */
-    _ctxS: function() {
-        this.cctx.save();
-        this.ccnt += 1;
-    },
-    /**
-     * Restore the canvas state and remember this in our object.
-     */
-    _ctxR: function() {
-        this.cctx.restore();
-        this.ccnt -= 1;
-    },
-    /**
-     * Convert the button information of a mouse event into
-     * RDP-like flags.
-     */
-    _mB: function(evt) {
-        if (this.aMF) {
-            return this.aMF;
-        }
-        var bidx;
-        if ('event' in evt && 'button' in evt.event) {
-            bidx = evt.event.button;
         } else {
-            bidx = evt.rightClick ? 2 : 0;
+            character = el.firstChild.get('char');
         }
-        switch (bidx) {
-            case 0:
-                return 0x1000; // left button
-            case 1:
-                return 0x4000; // middle button
-            case 2:
-                return 0x2000; // right button
+        if (this.deadCheckbox.checked && this.VKI_dead) {
+            if (this.VKI_dead != character) {
+                if (character != ' ') {
+                    if (this.VKI_deadkey[this.VKI_dead][character]) {
+                        this.kpress(this.VKI_deadkey[this.VKI_dead][character]);
+                        done = true;
+                    }
+                } else {
+                    this.kpress(this.VKI_dead);
+                    done = true;
+                }
+            } else {
+                done = true;
+            }
         }
-        return 0x1000;
+        this.VKI_dead = false;
+
+        if (!done) {
+            if (this.deadCheckbox.checked && this.VKI_deadkey[character]) {
+                this.VKI_dead = character;
+                el.addClass('dead');
+                if (this.VKI_shift) {
+                    this.modify('Shift');
+                }
+                if (this.VKI_alt) {
+                    this.modify('Alt');
+                }
+                if (this.VKI_altgr) {
+                    this.modify('AltGr');
+                }
+                if (this.VKI_ctrl) {
+                    this.modify('Ctrl');
+                }
+            } else {
+                this.kpress(character);
+            }
+        }
+        this.modify('');
     },
-    SetArtificialMouseFlags: function(mf) {
-        if (null == mf) {
-            this.aMF = 0;
-            return;
+    kclick2: function(evt) {
+        var c = evt.target.get('char');
+        if (c) {
+            this.kpress(c, true);
+            this.VKI_dead = false;
+            this.modify('');
         }
-        this.aMF = 0x1000; // left button
-        if (mf.r) {
-            this.aMF = 0x2000; // right
+    },
+    VKI_buildKeys: function() {
+        this.VKI_shift = this.VKI_shiftlock = this.VKI_altgr = this.VKI_altgrlock = this.VKI_dead = false;
+        var container = this.VKI_keyboard.tBodies[0].getElement('div');
+        container.getElements('table').each(function(el) { el.destroy(); });
+        for (var x = 0, hasDeadKeys = false, lyt; lyt = this.VKI_layout[this.VKI_kt].keys[x++];) {
+            var table = new Element('table',{
+                'cellspacing': '0'
+            }).inject(container);
+            if (lyt.length <= this.VKI_keyCenter) {
+                table.addClass('keyboardInputCenter');
+            }
+            var tbody = new Element('tbody').inject(table);
+            var tr = new Element('tr').inject(tbody);
+            for (var y = 0, lkey; lkey = lyt[y++];) {
+                var td = new Element('td').inject(tr);
+                if (this.VKI_symbol[lkey[0]]) {
+                    var text = this.VKI_symbol[lkey[0]].split('\n');
+                    var small = new Element('small', {
+                        'char': lkey[0]
+                    }).inject(td);
+                    for (var z = 0; z < text.length; z++) {
+                        if (z) {
+                            new Element('br').inject(small);
+                        }
+                        small.appendText(text[z]);
+                    }
+                } else {
+                    td.appendText(lkey[0] || '\xa0');
+                }
+
+                if (this.deadCheckbox.checked) {
+                    for (key in this.VKI_deadkey) {
+                        if (key === lkey[0]) {
+                            td.addClass('deadkey');
+                            break;
+                        }
+                    }
+                }
+                if (lyt.length > this.VKI_keyCenter && y == lyt.length) {
+                    td.addClass('last');
+                }
+                if (lkey[0] == ' ' || lkey[1] == ' ') {
+                    td.addClass('space');
+                }
+
+                switch (lkey[1]) {
+                    case 'Caps':
+                    case 'Ctrl':
+                    case 'Shift':
+                    case 'Alt':
+                    case 'AltGr':
+                    case 'AltLk':
+                        td.addEvent('click', function(type) {
+                            // XXX
+                            this.modify(type);
+                        }.bind(this, lkey[1]));
+                        break;
+                    case 'Tab':
+                        td.addEvent('click', function(e) {
+                            e.preventDefault();
+                            this.kpress('\t');
+                        }.bind(this));
+                        break;
+                    case 'Bksp':
+                        td.addEvent('click', function(e) {
+                            e.preventDefault();
+                            this.kpress('\b');
+                        }.bind(this));
+                        break;
+                    case 'Enter':
+                        td.addEvent('click', function(e) {
+                            e.preventDefault();
+                            this.kpress('\r');
+                        }.bind(this));
+                        break;
+                    default:
+                        td.addEvent('click', this.kclick.bind(this));
+                        break;
+                }
+                this.VKI_stdEvents(td);
+                for (var z = 0; z < 4; z++) {
+                    if (this.VKI_deadkey[lkey[z] = lkey[z] || '']) {
+                        hasDeadKeys = true;
+                    }
+                }
+            }
         }
-        if (mf.m) {
-            this.aMF = 0x4000; // middle
+        // Hide deadkey checkbox if layout has no deadkeys
+        if (this.options.deadcheck) {
+            this.deadCheckbox.setStyle('display', hasDeadKeys ? 'inline' : 'none');
+        }
+    },
+    modify: function(type) {
+        switch (type) {
+            case 'Alt':
+                this.VKI_alt = !this.VKI_alt;
+                break;
+            case 'AltGr':
+                this.VKI_altgr = !this.VKI_altgr;
+                break;
+            case 'AltLk':
+                this.VKI_altgr = 0;
+                this.VKI_altgrlock = !this.VKI_altgrlock;
+                break;
+            case 'Caps':
+                this.VKI_shift = 0;
+                this.VKI_shiftlock = !this.VKI_shiftlock;
+                break;
+            case 'Ctrl':
+                this.VKI_ctrl = !this.VKI_ctrl;
+                break;
+            case 'Shift':
+                this.VKI_shift = !this.VKI_shift;
+                break;
+        }
+        var vchar = 0;
+        if (!this.VKI_shift != !this.VKI_shiftlock) {
+            vchar += 1;
+        }
+        if (!this.VKI_altgr != !this.VKI_altgrlock) {
+            vchar += 2;
+        }
+        var tables = this.VKI_keyboard.tBodies[0].getElement('div').getElements('table');
+        for (var x = 0; x < tables.length; x++) {
+            var tds = tables[x].getElements('td');
+            for (var y = 0; y < tds.length; y++) {
+                var classes = {}, lkey = this.VKI_layout[this.VKI_kt].keys[x][y];
+                switch (lkey[1]) {
+                    case 'Alt':
+                        if (this.VKI_alt) {
+                            classes.pressed = 1;
+                        }
+                        break;
+                    case 'AltGr':
+                        if (this.VKI_altgr) {
+                            classes.pressed = 1;
+                        }
+                        break;
+                    case 'AltLk':
+                        if (this.VKI_altgrlock) {
+                            classes.pressed = 1;
+                        }
+                        break;
+                    case 'Shift':
+                        if (this.VKI_shift) {
+                            classes.pressed = 1;
+                        }
+                        break;
+                    case 'Caps':
+                        if (this.VKI_shiftlock) {
+                            classes.pressed = 1;
+                        }
+                        break;
+                    case 'Ctrl':
+                        if (this.VKI_ctrl) {
+                            classes.pressed = 1;
+                        }
+                        break;
+                    case 'Tab':
+                    case 'Enter':
+                    case 'Bksp':
+                        break;
+                    default:
+                        if (type) {
+                            tds[y].removeChild(tds[y].firstChild);
+                            if (this.VKI_symbol[lkey[vchar]]) {
+                                var text = this.VKI_symbol[lkey[vchar]].split('\n');
+                                var small = new Element('small', {
+                                    'char': lkey[vchar]
+                                }).inject(tds[y]);
+                                for (var z = 0; z < text.length; z++) {
+                                    if (z) {
+                                        new Element('br').inject(small);
+                                    }
+                                    small.appendText(text[z]);
+                                }
+                            } else {
+                                tds[y].appendText(lkey[vchar] || '\xa0');
+                            }
+                        }
+                        if (this.deadCheckbox.checked) {
+                            var character =
+                                tds[y].firstChild.nodeValue || tds[y].firstChild.className;
+                            if (this.VKI_dead) {
+                                if (character == this.VKI_dead) {
+                                    classes.pressed = 1;
+                                }
+                                if (this.VKI_deadkey[this.VKI_dead][character]) {
+                                    classes.target = 1;
+                                }
+                            }
+                            if (this.VKI_deadkey[character]) {
+                                classes.deadkey = 1;
+                            }
+                        }
+                        break;
+                }
+                if (y == tds.length - 1 && tds.length > this.VKI_keyCenter) {
+                    classes.last = 1;
+                }
+                if (lkey[0] == ' ' || lkey[1] == ' ') {
+                    classes.space = 1;
+                }
+                tds[y].removeClass('pressed').removeClass('target').removeClass('deadkey').removeClass('last').removeClass('space');
+                Object.each(classes, function(i,k) { tds[y].addClass(k); });
+            }
+        }
+    },
+    kpress: function(text, special) {
+        var e = {
+            code: text.charCodeAt(0),
+            shift: this.VKI_shift,
+            control: this.VKI_ctrl,
+            alt: this.VKI_alt,
+            meta: this.VKI_altgr,
+            special: special
+        };
+        this.fireEvent('vkpress', e);
+        if (this.VKI_alt) {
+            this.modify("Alt");
+        }
+        if (this.VKI_altgr) {
+            this.modify("AltGr");
+        }
+        if (this.VKI_ctrl) {
+            this.modify("Ctrl");
+        }
+        if (this.VKI_shift) {
+            this.modify("Shift");
+        }
+    },
+    show: function() {
+        this.VKI_keyboard.removeClass('hidden');
+    },
+    hide: function() {
+        this.VKI_keyboard.addClass('hidden');
+    },
+    toggle: function() {
+        this.VKI_keyboard.toggleClass('hidden');
+    },
+    dragEnd: function(evt) {
+        this.dragging = false;
+        window.removeEvent('mouseup', this.dragEnd.bind(this));
+        window.removeEvent('mousemove', this.dragMove.bind(this));
+        window.removeEvent('touchmove', this.dragMove.bind(this));
+    },
+    dragStart: function(evt) {
+        this.dragX = evt.page.x;
+        this.dragY = evt.page.y;
+        this.dragging = true;
+        window.addEvent('mouseup', this.dragEnd.bind(this));
+        window.addEvent('mousemove', this.dragMove.bind(this));
+        window.addEvent('touchmove', this.dragMove.bind(this));
+    },
+    dragMove: function(evt) {
+        if (this.dragging) {
+            this.posX += evt.page.x - this.dragX;
+            this.posY += evt.page.y - this.dragY;
+            this.dragX = evt.page.x;
+            this.dragY = evt.page.y;
+            this.VKI_keyboard.setStyles({'top':this.posY,'left':this.posX});
         }
     }
 });
-wsgate.copyRGBA = function(inA, inI, outA, outI) {
-    if ('subarray' in inA) {
-        outA.set(inA.subarray(inI, inI + 4), outI);
-    } else {
-        outA[outI++] = inA[inI++];
-        outA[outI++] = inA[inI++];
-        outA[outI++] = inA[inI++];
-        outA[outI] = inA[inI];
-    }
-}
-wsgate.xorbufRGBAPel16 = function(inA, inI, outA, outI, pel) {
-    var pelR = (pel & 0xF800) >> 11;
-    var pelG = (pel & 0x7E0) >> 5;
-    var pelB = pel & 0x1F;
-    // 656 -> 888
-    pelR = (pelR << 3 & ~0x7) | (pelR >> 2);
-    pelG = (pelG << 2 & ~0x3) | (pelG >> 4);
-    pelB = (pelB << 3 & ~0x7) | (pelB >> 2);
-
-    outA[outI++] = inA[inI++] ^ pelR;
-    outA[outI++] = inA[inI++] ^ pelG;
-    outA[outI++] = inA[inI] ^ pelB;
-    outA[outI] = 255;                                 // alpha
-}
-wsgate.buf2RGBA = function(inA, inI, outA, outI) {
-    var pel = inA[inI] | (inA[inI + 1] << 8);
-    var pelR = (pel & 0xF800) >> 11;
-    var pelG = (pel & 0x7E0) >> 5;
-    var pelB = pel & 0x1F;
-    // 656 -> 888
-    pelR = (pelR << 3 & ~0x7) | (pelR >> 2);
-    pelG = (pelG << 2 & ~0x3) | (pelG >> 4);
-    pelB = (pelB << 3 & ~0x7) | (pelB >> 2);
-
-    outA[outI++] = pelR;
-    outA[outI++] = pelG;
-    outA[outI++] = pelB;
-    outA[outI] = 255;                    // alpha
-}
-wsgate.pel2RGBA = function (pel, outA, outI) {
-    var pelR = (pel & 0xF800) >> 11;
-    var pelG = (pel & 0x7E0) >> 5;
-    var pelB = pel & 0x1F;
-    // 656 -> 888
-    pelR = (pelR << 3 & ~0x7) | (pelR >> 2);
-    pelG = (pelG << 2 & ~0x3) | (pelG >> 4);
-    pelB = (pelB << 3 & ~0x7) | (pelB >> 2);
-
-    outA[outI++] = pelR;
-    outA[outI++] = pelG;
-    outA[outI++] = pelB;
-    outA[outI] = 255;                    // alpha
-}
-
-wsgate.flipV = function(inA, width, height) {
-    var sll = width * 4;
-    var half = height / 2;
-    var lbot = sll * (height - 1);
-    var ltop = 0;
-    var tmp = new Uint8Array(sll);
-    var i, j;
-    if ('subarray' in inA) {
-        for (i = 0; i < half ; ++i) {
-            tmp.set(inA.subarray(ltop, ltop + sll));
-            inA.set(inA.subarray(lbot, lbot + sll), ltop);
-            inA.set(tmp, lbot);
-            ltop += sll;
-            lbot -= sll;
-        }
-    } else {
-        for (i = 0; i < half ; ++i) {
-            for (j = 0; j < sll; ++j) {
-                tmp[j] = inA[ltop + j];
-                inA[ltop + j] = inA[lbot + j];
-                inA[lbot + j] = tmp[j];
-            }
-            ltop += sll;
-            lbot -= sll;
-        }
-    }
-}
-
-wsgate.dRGB162RGBA = function(inA, inLength, outA) {
-    var inI = 0;
-    var outI = 0;
-    while (inI < inLength) {
-        wsgate.buf2RGBA(inA, inI, outA, outI);
-        inI += 2;
-        outI += 4;
-    }
-}
-
-wsgate.ExtractCodeId = function(bOrderHdr) {
-    var code;
-    switch (bOrderHdr) {
-        case 0xF0:
-        case 0xF1:
-        case 0xF6:
-        case 0xF8:
-        case 0xF3:
-        case 0xF2:
-        case 0xF7:
-        case 0xF4:
-        case 0xF9:
-        case 0xFA:
-        case 0xFD:
-        case 0xFE:
-            return bOrderHdr;
-    }
-    code = bOrderHdr >> 5;
-    switch (code) {
-        case 0x00:
-        case 0x01:
-        case 0x03:
-        case 0x02:
-        case 0x04:
-            return code;
-    }
-    return bOrderHdr >> 4;
-}
-wsgate.ExtractRunLength = function(code, inA, inI, advance) {
-    var runLength = 0;
-    var ladvance = 1;
-    switch (code) {
-        case 0x02:
-            runLength = inA[inI] & 0x1F;
-            if (0 == runLength) {
-                runLength = inA[inI + 1] + 1;
-                ladvance += 1;
-            } else {
-                runLength *= 8;
-            }
-            break;
-        case 0x0D:
-            runLength = inA[inI] & 0x0F;
-            if (0 == runLength) {
-                runLength = inA[inI + 1] + 1;
-                ladvance += 1;
-            } else {
-                runLength *= 8;
-            }
-            break;
-        case 0x00:
-        case 0x01:
-        case 0x03:
-        case 0x04:
-            runLength = inA[inI] & 0x1F;
-            if (0 == runLength) {
-                runLength = inA[inI + 1] + 32;
-                ladvance += 1;
-            }
-            break;
-        case 0x0C:
-        case 0x0E:
-            runLength = inA[inI] & 0x0F;
-            if (0 == runLength) {
-                runLength = inA[inI + 1] + 16;
-                ladvance += 1;
-            }
-            break;
-        case 0xF0:
-        case 0xF1:
-        case 0xF6:
-        case 0xF8:
-        case 0xF3:
-        case 0xF2:
-        case 0xF7:
-        case 0xF4:
-            runLength = inA[inI + 1] | (inA[inI + 2] << 8);
-            ladvance += 2;
-            break;
-    }
-    advance.val = ladvance;
-    return runLength;
-}
-
-wsgate.WriteFgBgImage16toRGBA = function(outA, outI, rowDelta, bitmask, fgPel, cBits) {
-    var cmpMask = 0x01;
-
-    while (cBits-- > 0) {
-        if (bitmask & cmpMask) {
-            wsgate.xorbufRGBAPel16(outA, outI - rowDelta, outA, outI, fgPel);
-        } else {
-            wsgate.copyRGBA(outA, outI - rowDelta, outA, outI);
-        }
-        outI += 4;
-        cmpMask <<= 1;
-    }
-    return outI;
-}
-
-wsgate.WriteFirstLineFgBgImage16toRGBA = function(outA, outI, bitmask, fgPel, cBits) {
-    var cmpMask = 0x01;
-
-    while (cBits-- > 0) {
-        if (bitmask & cmpMask) {
-            wsgate.pel2RGBA(fgPel, outA, outI);
-        } else {
-            wsgate.pel2RGBA(0, outA, outI);
-        }
-        outI += 4;
-        cmpMask <<= 1;
-    }
-    return outI;
-}
-
-wsgate.dRLE16_RGBA = function(inA, inLength, width, outA) {
-    var runLength;
-    var code, pixelA, pixelB, bitmask;
-    var inI = 0;
-    var outI = 0;
-    var fInsertFgPel = false;
-    var fFirstLine = true;
-    var fgPel = 0xFFFFFF;
-    var rowDelta = width * 4;
-    var advance = {val: 0};
-
-    while (inI < inLength) {
-        if (fFirstLine) {
-            if (outI >= rowDelta) {
-                fFirstLine = false;
-                fInsertFgPel = false;
-            }
-        }
-        code = wsgate.ExtractCodeId(inA[inI]);
-        if (code == 0x00 || code == 0xF0) {
-            runLength = wsgate.ExtractRunLength(code, inA, inI, advance);
-            inI += advance.val;
-            if (fFirstLine) {
-                if (fInsertFgPel) {
-                    wsgate.pel2RGBA(fgPel, outA, outI);
-                    outI += 4;
-                    runLength -= 1;
-                }
-                while (runLength > 0) {
-                    wsgate.pel2RGBA(0, outA, outI);
-                    runLength -= 1;
-                    outI += 4;
-                }
-            } else {
-                if (fInsertFgPel) {
-                    wsgate.xorbufRGBAPel16(outA, outI - rowDelta, outA, outI, fgPel);
-                    outI += 4;
-                    runLength -= 1;
-                }
-                while (runLength > 0) {
-                    wsgate.copyRGBA(outA, outI - rowDelta, outA, outI);
-                    runLength -= 1;
-                    outI += 4;
-                }
-            }
-            fInsertFgPel = true;
-            continue;
-        }
-        fInsertFgPel = false;
-        switch (code) {
-            case 0x01:
-            case 0xF1:
-            case 0x0C:
-            case 0xF6:
-                runLength = wsgate.ExtractRunLength(code, inA, inI, advance);
-                inI += advance.val;
-                if (code == 0x0C || code == 0xF6) {
-                    fgPel = inA[inI] | (inA[inI + 1] << 8);
-                    inI += 2;
-                }
-                if (fFirstLine) {
-                    while (runLength > 0) {
-                        wsgate.pel2RGBA(fgPel, outA, outI);
-                        runLength -= 1;
-                        outI += 4;
-                    }
-                } else {
-                    while (runLength > 0) {
-                        wsgate.xorbufRGBAPel16(outA, outI - rowDelta, outA, outI, fgPel);
-                        runLength -= 1;
-                        outI += 4;
-                    }
-                }
-                break;
-            case 0x0E:
-            case 0xF8:
-                runLength = wsgate.ExtractRunLength(code, inA, inI, advance);
-                inI += advance.val;
-                pixelA = inA[inI] | (inA[inI + 1] << 8);
-                inI += 2;
-                pixelB = inA[inI] | (inA[inI + 1] << 8);
-                inI += 2;
-                while (runLength > 0) {
-                    wsgate.pel2RGBA(pixelA, outA, outI);
-                    outI += 4;
-                    wsgate.pel2RGBA(pixelB, outA, outI);
-                    outI += 4;
-                    runLength -= 1;
-                }
-                break;
-            case 0x03:
-            case 0xF3:
-                runLength = wsgate.ExtractRunLength(code, inA, inI, advance);
-                inI += advance.val;
-                pixelA = inA[inI] | (inA[inI + 1] << 8);
-                inI += 2;
-                while (runLength > 0) {
-                    wsgate.pel2RGBA(pixelA, outA, outI);
-                    outI += 4;
-                    runLength -= 1;
-                }
-                break;
-            case 0x02:
-            case 0xF2:
-            case 0x0D:
-            case 0xF7:
-                runLength = wsgate.ExtractRunLength(code, inA, inI, advance);
-                inI += advance.val;
-                if (code == 0x0D || code == 0xF7) {
-                    fgPel = inA[inI] | (inA[inI + 1] << 8);
-                    inI += 2;
-                }
-                if (fFirstLine) {
-                    while (runLength >= 8) {
-                        bitmask = inA[inI++];
-                        outI = wsgate.WriteFirstLineFgBgImage16toRGBA(outA, outI, bitmask, fgPel, 8);
-                        runLength -= 8;
-                    }
-                } else {
-                    while (runLength >= 8) {
-                        bitmask = inA[inI++];
-                        outI = wsgate.WriteFgBgImage16toRGBA(outA, outI, rowDelta, bitmask, fgPel, 8);
-                        runLength -= 8;
-                    }
-                }
-                if (runLength > 0) {
-                    bitmask = inA[inI++];
-                    if (fFirstLine) {
-                        outI = wsgate.WriteFirstLineFgBgImage16toRGBA(outA, outI, bitmask, fgPel, runLength);
-                    } else {
-                        outI = wsgate.WriteFgBgImage16toRGBA(outA, outI, rowDelta, bitmask, fgPel, runLength);
-                    }
-                }
-                break;
-            case 0x04:
-            case 0xF4:
-                runLength = wsgate.ExtractRunLength(code, inA, inI, advance);
-                inI += advance.val;
-                while (runLength > 0) {
-                    wsgate.pel2RGBA(inA[inI] | (inA[inI + 1] << 8), outA, outI);
-                    inI += 2;
-                    outI += 4;
-                    runLength -= 1;
-                }
-                break;
-            case 0xF9:
-                inI += 1;
-                if (fFirstLine) {
-                    outI = wsgate.WriteFirstLineFgBgImage16toRGBA(outA, outI, 0x03, fgPel, 8);
-                } else {
-                    outI = wsgate.WriteFgBgImage16toRGBA(outA, outI, rowDelta, 0x03, fgPel, 8);
-                }
-                break;
-            case 0xFA:
-                inI += 1;
-                if (fFirstLine) {
-                    outI = wsgate.WriteFirstLineFgBgImage16toRGBA(outA, outI, 0x05, fgPel, 8);
-                } else {
-                    outI = wsgate.WriteFgBgImage16toRGBA(outA, outI, rowDelta, 0x05, fgPel, 8);
-                }
-                break;
-            case 0xFD:
-                inI += 1;
-                wsgate.pel2RGBA(0xFFFF, outA, outI);
-                outI += 4;
-                break;
-            case 0xFE:
-                inI += 1;
-                wsgate.pel2RGBA(0, outA, outI);
-                outI += 4;
-                break;
-        }
-    }
-}
-/**
- * Continuos refresh for the IMEhelper
- */
-function refreshIMEhelper(){
-    setTimeout(this.refreshIMEhelper,20);
-    //IME helper div
-    if(rdp.IMEon){
-        $('IMEhelper').setStyle('visibility','visible');
-        $('IMEhelper').set('html',$('textareainput').get('value'));
-    }else{
-        $('IMEhelper').setStyle('visibility','hidden');
-   }
-}
